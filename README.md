@@ -1,4 +1,4 @@
-# Sales Forecast Pipeline
+# Sales Forecasting Retail
 
 Pipeline de prévision des ventes par produit (SKU) et agence sur un horizon de 15 jours.
 
