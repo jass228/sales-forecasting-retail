@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .env
+
+# Repository-specific ignores
+notebooks/
+.vscode/
