@@ -186,6 +186,6 @@ Moyenne historique par agence/SKU/mois. Le modèle doit battre cette baseline po
 
 Joseph A.
 
-## 📄 License
+## License
 
 Ce projet est sous licence MIT.
