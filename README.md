@@ -88,7 +88,7 @@ Options :
 - `--artifacts` : Chemin des artifacts (défaut: models/artifacts.pkl)
 - `--output` : Chemin de sortie (défaut: outputs/predictions.csv)
 
-## 🔧 Features Engineering
+## Features Engineering
 
 ### Features temporelles
 
@@ -124,7 +124,7 @@ Options :
 - Prophet : Adapté aux séries temporelles univariées, moins flexible
 - LSTM : Overkill pour des données mensuelles (~60 points par série)
 
-## 📉 Métriques
+## Métriques
 
 | Métrique | Description                                            |
 | -------- | ------------------------------------------------------ |
@@ -136,7 +136,7 @@ Options :
 
 Moyenne historique par agence/SKU/mois. Le modèle doit battre cette baseline pour être considéré utile.
 
-## 🏭 Vision Production (GCP)
+## Vision Production (GCP)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -168,7 +168,7 @@ Moyenne historique par agence/SKU/mois. Le modèle doit battre cette baseline po
 - **Cloud Run** : API de prédiction serverless
 - **Cloud Storage** : Stockage des modèles et artifacts
 
-## 📝 Limitations et Améliorations
+## Limitations et Améliorations
 
 ### Limitations actuelles
 
@@ -182,7 +182,7 @@ Moyenne historique par agence/SKU/mois. Le modèle doit battre cette baseline po
 - Ajouter une validation croisée temporelle
 - Intégrer des données externes (météo prévue, calendrier promotionnel)
 
-## 👤 Auteur
+## Auteur
 
 Joseph A.
 
