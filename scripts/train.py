@@ -4,7 +4,6 @@ Description: Main training script.
 """
 import argparse
 from pathlib import Path
-import pandas as pd
 from src.data.loader import load_data, get_data_info, split_train_test
 from src.features.engineering import prepare_features, get_feature_columns, get_target_column
 from src.models.trainer import train_model, get_feature_importance
@@ -14,6 +13,8 @@ from src.evaluation.metrics import (
     print_evaluation_report
 )
 from src.inference.predictor import save_model, save_artifacts
+
+# pylint: disable=C0103:invalid-name
 
 def parse_args() -> argparse.Namespace:
     """ Parse command line arguments.

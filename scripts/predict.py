@@ -1,11 +1,10 @@
 """
 @author: Joseph A.
-Description:Main prediction script.
+Description: Main prediction script.
 """
 
 import argparse
 from pathlib import Path
-import pandas as pd
 from src.data.loader import load_data
 from src.inference.predictor import (
     load_model,

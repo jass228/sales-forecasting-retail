@@ -2,7 +2,7 @@
 
 Pipeline de prévision des ventes par produit (SKU) et agence sur un horizon de 15 jours.
 
-## 📋 Contexte
+## Contexte
 
 Ce projet répond à un besoin de prévision des volumes de ventes mensuels pour optimiser :
 
@@ -10,7 +10,7 @@ Ce projet répond à un besoin de prévision des volumes de ventes mensuels pour
 - La planification logistique
 - Les décisions commerciales
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 sales-forecasting-retail/
@@ -34,7 +34,7 @@ sales-forecasting-retail/
 └── outputs/                    # Prédictions générées
 ```
 
-## 🚀 Installation
+## Installation
 
 ```bash
 # Cloner le repo
@@ -45,7 +45,7 @@ cd sales-forecasting-retail
 uv sync
 ```
 
-## 📊 Données
+## Données
 
 Le dataset contient les colonnes suivantes :
 
@@ -58,7 +58,7 @@ Le dataset contient les colonnes suivantes :
 - `discount_in_percent` : Pourcentage de remise
 - Features calendaires (jours fériés, événements)
 
-## 🎯 Usage
+## Usage
 
 ### Entraînement
 
@@ -107,7 +107,7 @@ Options :
 - `price_actual` : Impact prix
 - `discount_in_percent` : Impact promotions
 
-## 📈 Modèle
+## Modèle
 
 **Algorithme** : LightGBM (Gradient Boosting)
 
