@@ -234,6 +234,14 @@ Le meilleur modèle est sélectionné automatiquement sur le MAE.
                     └───────────────┘     └─────────────┘
 ```
 
+**Flux simplifié :**
+
+1. **BigQuery** : stockage des données source
+2. **Vertex AI Training** : entraînement du modèle
+3. **Model Registry** : versioning du modèle
+4. **Batch Prediction** : génération des prévisions (hebdo/mensuel)
+5. **Cloud Monitoring** : surveillance des performances et alertes
+
 ### Composants
 
 | Composant                      | Rôle                                                            |
@@ -269,6 +277,8 @@ Pour ce cas d'usage (prévision mensuelle de ventes), une **inférence batch** e
 | MAPE          | > 20%               | Réentraînement |
 | Latency batch | > 2h                | Scaling        |
 
+> **Note** : Ces seuils sont des exemples. En production, ils seraient définis avec les équipes métier en fonction de l'impact business.
+
 #### 2. Détection du drift
 
 | Type de drift        | Méthode                                            | Fréquence      |
@@ -292,15 +302,16 @@ Pour ce cas d'usage (prévision mensuelle de ventes), une **inférence batch** e
 | **Data-based**        | Drift détecté (p-value < 0.05) | Réentraînement + investigation |
 | **Manuel**            | Changement business majeur     | Réentraînement + revalidation  |
 
+> **Note** : Les fréquences et conditions sont des exemples. En production, elles seraient définies selon le contexte métier et la vitesse d'évolution des données.
+
 **Pipeline de réentraînement** :
 
 1. Récupération des nouvelles données (BigQuery)
 2. Feature engineering
 3. Entraînement sur fenêtre glissante (ex: 24 derniers mois)
-4. Évaluation sur holdout récent
+4. Évaluation sur données récentes non vues par le modèle
 5. Comparaison avec modèle en prod
 6. Déploiement si amélioration > seuil
-7. A/B testing optionnel
 
 ---
 
