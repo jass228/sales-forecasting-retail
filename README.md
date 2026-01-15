@@ -15,7 +15,6 @@ Pipeline de prévision des ventes par produit (SKU) et agence sur un horizon de 
 - [Métriques](#métriques)
 - [Vision Production (GCP)](#vision-production-gcp)
 - [Limitations et Améliorations](#limitations-et-améliorations)
-- [Hypothèses](#hypothèses)
 
 ## Contexte
 
@@ -103,7 +102,15 @@ Le dataset contient les colonnes suivantes :
 
 ## Features Incluses
 
-Le modèle utilise **32 features** au total :
+Le modèle utilise **32 features** au total.
+
+**Logique de sélection des features** :
+
+- **Lags et rolling means** : Capturent l'autocorrélation et les tendances des ventes passées (features les plus prédictives pour les séries temporelles)
+- **Features temporelles** : Capturent la saisonnalité (mois, trimestre)
+- **Features exogènes** : Toutes les variables du dataset sont incluses car elles peuvent influencer les ventes (prix, météo, événements)
+
+En production, une analyse d'importance des features permettrait d'identifier et supprimer les features peu contributives.
 
 ### Features catégorielles
 
@@ -181,7 +188,9 @@ Les colonnes exogènes manquantes sont automatiquement remplies avec les derniè
 
 ## Modèles
 
-Trois algorithmes sont comparés :
+### Choix des algorithmes
+
+Trois modèles tree-based sont comparés :
 
 | Modèle           | Configuration            |
 | ---------------- | ------------------------ |
@@ -189,9 +198,16 @@ Trois algorithmes sont comparés :
 | **XGBoost**      | 500 estimateurs, lr=0.05 |
 | **LightGBM**     | 500 estimateurs, lr=0.05 |
 
+**Pourquoi des modèles tree-based ?**
+
+- **Performants sur données tabulaires** : Les arbres de décision excellent sur ce type de données (features mixtes numériques/catégorielles)
+- **Pas de normalisation requise** : Contrairement aux réseaux de neurones ou à la régression linéaire
+- **Gestion native des non-linéarités** : Capturent les interactions complexes entre features
+- **Interprétables** : Feature importance disponible pour expliquer les prédictions
+
 Le meilleur modèle est sélectionné automatiquement sur le MAE.
 
-> **Note** : Les hyperparamètres utilisés sont des valeurs par défaut raisonnables. L'objectif de ce POC est de démontrer une architecture industrialisable, pas d'optimiser les performances du modèle. En production, une étape d'optimisation (GridSearchCV...) serait ajoutée.
+> **Note** : Les hyperparamètres utilisés sont des valeurs par défaut raisonnables. L'objectif de ce POC est de démontrer une architecture industrialisable, pas d'optimiser les performances du modèle. En production, une étape d'optimisation serait ajoutée.
 
 ## Métriques
 
@@ -201,46 +217,53 @@ Le meilleur modèle est sélectionné automatiquement sur le MAE.
 | **RMSE** | Pénalise les grosses erreurs                 |
 | **MAPE** | Erreur en pourcentage                        |
 
+**Pourquoi MAE comme métrique principale ?**
+
+- **Interprétable** : Une MAE de 250 signifie qu'on se trompe en moyenne de 250 unités de volume
+- **Robuste aux outliers** : Contrairement au RMSE, le MAE ne sur-pénalise pas les erreurs extrêmes
+- **Adapté au métier** : Pour la gestion des stocks, une erreur moyenne constante est plus facile à anticiper qu'une erreur variable
+
 ---
 
 ## Vision Production (GCP)
 
+Cette section décrit comment cette solution serait déployée et opérée sur Google Cloud Platform.
+
 ### Architecture Vertex AI
 
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│                     Vertex AI Pipelines                         │
-│                  (Orchestration Kubeflow)                       │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-          ┌───────────────────┼───────────────────┐
-          ▼                   ▼                   ▼
-   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-   │  BigQuery   │     │ Vertex AI   │     │ Vertex AI   │
-   │  (Source)   │     │  Training   │     │   Batch     │
-   └─────────────┘     └─────────────┘     │ Prediction  │
-          │                   │            └─────────────┘
-          │                   ▼                   │
-          │           ┌─────────────┐             │
-          │           │ Model       │             │
-          │           │ Registry    │◄────────────┘
-          │           └─────────────┘
-          │                   │
-          └───────────────────┴───────────────────┐
-                              ▼                   ▼
-                    ┌───────────────┐     ┌─────────────┐
-                    │ Vertex AI     │     │ Cloud       │
-                    │ Feature Store │     │ Monitoring  │
-                    └───────────────┘     └─────────────┘
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                              VERTEX AI PIPELINES                               │
+├────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                │
+│  PIPELINE TRAINING                                                             │
+│  ┌────────────┐   ┌────────────┐   ┌────────────┐   ┌────────────┐             │
+│  │  BigQuery  │──►│  Feature   │──►│  Training  │──►│   Model    │             │
+│  │  (source)  │   │ Engineering│   │    Job     │   │  Registry  │             │
+│  └────────────┘   └────────────┘   └────────────┘   └─────┬──────┘             │
+│                                                           │                    │
+│  PIPELINE INFERENCE                                       │                    │
+│  ┌────────────┐   ┌────────────┐   ┌────────────┐         │                    │
+│  │  BigQuery  │──►│  Feature   │──►│   Batch    │◄────────┘                    │
+│  │ (new data) │   │ Engineering│   │ Prediction │                              │
+│  └────────────┘   └────────────┘   └─────┬──────┘                              │
+│                                          │                                     │
+│                                          ▼                                     │
+│                                   ┌────────────┐                               │
+│                                   │  BigQuery  │                               │
+│                                   │(résultats) │                               │
+│                                   └────────────┘                               │
+└────────────────────────────────────────────────────────────────────────────────┘
+                                          │
+                                          ▼
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                                   MONITORING                                   │
+│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐               │
+│  │   Vertex AI     │──►│ Cloud Monitoring│──►│  Cloud Alerting │──► Slack      │
+│  │ Model Monitoring│   │   (dashboards)  │   │                 │               │
+│  └─────────────────┘   └─────────────────┘   └─────────────────┘               │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
-
-**Flux simplifié :**
-
-1. **BigQuery** : stockage des données source
-2. **Vertex AI Training** : entraînement du modèle
-3. **Model Registry** : versioning du modèle
-4. **Batch Prediction** : génération des prévisions (hebdo/mensuel)
-5. **Cloud Monitoring** : surveillance des performances et alertes
 
 ### Composants
 
@@ -319,27 +342,25 @@ Pour ce cas d'usage (prévision mensuelle de ventes), une **inférence batch** e
 
 ### Limitations actuelles
 
-- **Cold start** : Pas de gestion des nouveaux produits/agences
-- **Features exogènes à l'inférence** : Remplies avec dernières valeurs connues (hypothèse de stabilité)
-- **Horizon unique** : Un seul modèle pour tous les horizons
+| Limitation                          | Impact                         | Compromis réalisé                                                            |
+| ----------------------------------- | ------------------------------ | ---------------------------------------------------------------------------- |
+| **Cold start**                      | Nouveaux SKU/agences non gérés | Nécessite historique minimum de 12 mois                                      |
+| **Hyperparamètres fixes**           | Performance non optimale       | Priorité donnée à l'architecture vs tuning                                   |
+| **Pas de tests unitaires**          | Maintenabilité réduite         | Contrainte de temps                                                          |
+| **Horizon unique**                  | Même modèle pour H+1 à H+4     | Simplification acceptable pour POC                                           |
+| **Features exogènes à l'inférence** | Approximation                  | Remplies avec dernières valeurs connues (hypothèse de stabilité court terme) |
 
 ### Améliorations possibles
 
-| Priorité | Amélioration                                               |
-| -------- | ---------------------------------------------------------- |
-| Haute    | Intégrer prévisions météo réelles (API météo)              |
-| Haute    | Intégrer calendrier promotionnel planifié                  |
-| Moyenne  | Multi-horizon : un modèle par horizon (H+1, H+2, H+3, H+4) |
-| Moyenne  | Cross-validation temporelle (TimeSeriesSplit)              |
-| Basse    | Modèle hiérarchique (agrégation par catégorie produit)     |
-| Basse    | Modèles deep learning (si plus de données)                 |
-
-## Hypothèses
-
-1. Les données historiques sont représentatives du futur
-2. La structure des agences/produits reste stable
-3. Les patterns saisonniers sont récurrents
-4. Les features exogènes (prix, météo) restent relativement stables à court terme (si non fournies à l'inférence)
+- **Tests unitaires et d'intégration** : pytest sur les modules critiques
+- **Logging structuré** : Traçabilité des runs (logging Python ou MLflow)
+- **Hyperparameter tuning** : Optimisation des hyperparamètres avec cross-validation temporelle
+- **Cross-validation temporelle** : TimeSeriesSplit pour une évaluation plus robuste
+- **Feature selection** : Analyse de corrélation, importance des features, suppression des features redondantes
+- **Multi-horizon** : Un modèle spécialisé par horizon (H+1, H+2, H+3, H+4)
+- **Interprétabilité** : SHAP values pour expliquer les prédictions au métier
+- **Cold start** : Modèle hiérarchique pour les nouveaux produits/agences
+- **Containerisation** : Docker + CI/CD
 
 ## Auteur
 
@@ -347,4 +368,4 @@ Joseph A.
 
 ## License
 
-Ce projet est sous licence MIT.
+Ce projet est sous licence [MIT](LICENSE).
