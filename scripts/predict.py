@@ -1,163 +1,115 @@
 """
 @author: Joseph A.
-Description: Main prediction script.
+Description: Prediction script for sales forecasting.
 """
-
-import argparse
-from pathlib import Path
-from src.data.loader import load_data
-from src.inference.predictor import (
-    load_model,
-    load_artifacts,
-    predict,
-    generate_forecast,
+import pandas as pd
+from src.configs.config import (
+    DATE_COL, TARGET_COL, KEY_COLS,
+    PREDICT_DATA_PATH, MODEL_DIR, OUTPUT_DIR,
+    LAGS, ROLLING_WINDOWS, HISTORY_PATH
 )
+from src.data.loader import load_data
+from src.data.preprocessing import encode_data, save_data
+from src.features.engineering import build_features
+from src.inference.predictor import load_model, predict
 
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Generate sales predictions")
+#pylint: disable=C0103:invalid-name
 
-    parser.add_argument(
-        "--data",
-        type=str,
-        default=None,
-        help="Path to the input data CSV file",
-    )
-    parser.add_argument(
-        "--forecast",
-        action="store_true",
-        help="Generate forecast for future dates",
-    )
-    parser.add_argument(
-        "--start-date",
-        type=str,
-        default=None,
-        help="Forecast start date (YYYY-MM-DD)",
-    )
-    parser.add_argument(
-        "--end-date",
-        type=str,
-        default=None,
-        help="Forecast end date (YYYY-MM-DD)",
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="models/model.pkl",
-        help="Path to the trained model",
-    )
-    parser.add_argument(
-        "--artifacts",
-        type=str,
-        default="models/artifacts.pkl",
-        help="Path to training artifacts",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="outputs/predictions.csv",
-        help="Path to save predictions",
-    )
+EXCLUDE_COLS = [TARGET_COL, DATE_COL]
 
-    return parser.parse_args()
+def fill_missing_exog(df_new: pd.DataFrame, df_history: pd.DataFrame) -> pd.DataFrame:
+    """Fill missing exogenous columns with last known values from history."""
+    df_new = df_new.copy()
 
+    # Get exogenous columns from history (exclude date, keys, target, _is_new)
+    exog_cols = [c for c in df_history.columns
+                if c not in KEY_COLS + [DATE_COL, TARGET_COL, "_is_new"]]
 
-def main() -> None:
+    # Get last known values per agency/sku
+    df_last = (df_history.sort_values(DATE_COL)
+            .groupby(KEY_COLS)[exog_cols]
+            .last()
+            .reset_index())
+
+    # Fill missing columns in new data
+    for col in exog_cols:
+        if col not in df_new.columns:
+            df_new = df_new.merge(df_last[KEY_COLS + [col]], on=KEY_COLS, how="left")
+
+    return df_new
+
+def main():
     """Main prediction pipeline."""
-    args = parse_args()
+    # 1. Load historical data and new data
+    print("[1/5] Loading data...")
+    df_history = load_data(HISTORY_PATH)
+    df_history[DATE_COL] = pd.to_datetime(df_history[DATE_COL])
 
-    # =========================================================================
-    # 1. LOAD MODEL AND ARTIFACTS
-    # =========================================================================
-    print("=" * 60)
-    print("1. LOADING MODEL AND ARTIFACTS")
-    print("=" * 60)
+    df_new = load_data(PREDICT_DATA_PATH)
+    df_new[DATE_COL] = pd.to_datetime(df_new[DATE_COL])
 
-    model = load_model(args.model)
-    artifacts = load_artifacts(args.artifacts)
+    # Mark new data rows for filtering later
+    df_history["_is_new"] = False
+    df_new["_is_new"] = True
 
-    historical_means = artifacts["historical_means"]
-    encoders = artifacts["encoders"]
+    # Add placeholder volume for new data (needed for feature engineering)
+    if TARGET_COL not in df_new.columns:
+        df_new[TARGET_COL] = 0
 
-    print(f"Model loaded from: {args.model}")
-    print(f"Artifacts loaded from: {args.artifacts}")
+    # Fill missing exogenous columns with last known values
+    df_new = fill_missing_exog(df_new, df_history)
 
-    # =========================================================================
-    # 2. GENERATE PREDICTIONS
-    # =========================================================================
-    print("\n" + "=" * 60)
-    print("2. GENERATING PREDICTIONS")
-    print("=" * 60)
+    # 2. Concatenate history and new data
+    print("[2/5] Preparing data with history...")
+    df_combined = pd.concat([df_history, df_new], ignore_index=True)
+    df_combined = df_combined.sort_values(KEY_COLS + [DATE_COL]).reset_index(drop=True)
 
-    if args.forecast:
-        # Forecast mode: generate predictions for future dates
-        if not args.start_date or not args.end_date:
-            raise ValueError("--start-date and --end-date required for forecast mode")
+    # 3. Feature engineering (lags computed from historical volume)
+    print("[3/5] Computing features...")
+    df_fe = build_features(df_combined, LAGS, ROLLING_WINDOWS)
 
-        # Get all agencies and SKUs from encoders
-        agencies = list(encoders["agency"].keys())
-        skus = list(encoders["sku"].keys())
+    # Filter only new rows (the ones we want to predict)
+    df_predict = df_fe[df_fe["_is_new"]].copy()
 
-        print(f"Forecast mode: {args.start_date} → {args.end_date}")
-        print(f"Agencies: {len(agencies)}")
-        print(f"SKUs: {len(skus)}")
+    # Keep only rows with valid lag features (first horizon has real lags)
+    lag_cols = [f"{TARGET_COL}_lag_{lag}" for lag in LAGS]
+    rolling_cols = [f"{TARGET_COL}_rolling_mean_{w}" for w in ROLLING_WINDOWS]
+    feature_lag_cols = lag_cols + rolling_cols
+    df_predict = df_predict.dropna(subset=feature_lag_cols)
 
-        result = generate_forecast(
-            agencies=agencies,
-            skus=skus,
-            start_date=args.start_date,
-            end_date=args.end_date,
-            model=model,
-            historical_means=historical_means,
-            encoders=encoders,
-        )
+    df_predict = df_predict.drop(columns=["_is_new", TARGET_COL])
 
-    else:
-        # Prediction mode: predict on existing data
-        if not args.data:
-            raise ValueError("--data required for prediction mode")
+    if len(df_predict) == 0:
+        raise ValueError("No rows to predict after feature engineering.")
 
-        df = load_data(args.data)
-        print(f"Input data: {len(df):,} rows")
+    # 4. Encode data
+    print("[4/5] Encoding data...")
+    encoder = load_model(MODEL_DIR / "encoder.pkl")
+    df_encoded, _ = encode_data(df_predict, encoder)
 
-        result = predict(df, model, historical_means, encoders)
-        result = result[["agency", "sku", "date", "volume", "predicted_volume"]]
+    feature_cols = [c for c in df_encoded.columns if c not in EXCLUDE_COLS]
 
-    print(f"Predictions generated: {len(result):,} rows")
+    # 5. Load model and predict
+    print("[5/5] Generating predictions...")
+    model = load_model(MODEL_DIR / "best_model.pkl")
+    df_pred = predict(model, df_encoded, feature_cols)
 
-    # =========================================================================
-    # 3. SAVE PREDICTIONS
-    # =========================================================================
-    print("\n" + "=" * 60)
-    print("3. SAVING PREDICTIONS")
-    print("=" * 60)
+    # Clip negative predictions to 0
+    df_pred["prediction"] = df_pred["prediction"].clip(lower=0)
 
-    # Create output directory if needed
-    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    # Decode agency/sku back to original names
+    df_pred[KEY_COLS] = encoder.inverse_transform(df_pred[KEY_COLS])
 
-    result.to_csv(args.output, index=False)
-    print(f"Predictions saved to: {args.output}")
+    # Prepare output
+    output_cols = [DATE_COL] + KEY_COLS + ["prediction"]
+    available_cols = [c for c in output_cols if c in df_pred.columns]
+    df_output = df_pred[available_cols].copy()
 
-    # =========================================================================
-    # 4. SUMMARY
-    # =========================================================================
-    print("\n" + "=" * 60)
-    print("4. PREDICTION SUMMARY")
-    print("=" * 60)
+    # Save predictions
+    output_path = OUTPUT_DIR / "predictions.csv"
+    save_data(df_output, output_path)
 
-    print("\nPredicted volume statistics:")
-    print(f"  Min:  {result['predicted_volume'].min():.2f}")
-    print(f"  Max:  {result['predicted_volume'].max():.2f}")
-    print(f"  Mean: {result['predicted_volume'].mean():.2f}")
-    print(f"  Std:  {result['predicted_volume'].std():.2f}")
-
-    print("\nSample predictions:")
-    print(result.head(10).to_string(index=False))
-
-    print("\n" + "=" * 60)
-    print("PREDICTION COMPLETE")
-    print("=" * 60)
-
+    print("Predictions saved!")
 
 if __name__ == "__main__":
     main()

@@ -8,7 +8,13 @@ wheels/
 
 # Virtual environments
 .env
+.venv
 
-# Repository-specific ignores
-notebooks/
+# IDE
 .vscode/
+.idea/
+
+# Generated artifacts (optional - can be committed for demo)
+# models/
+# outputs/
+# data/processed/

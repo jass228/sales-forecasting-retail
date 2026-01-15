@@ -1,6 +1,21 @@
 # Sales Forecasting Retail
 
-Pipeline de prévision des ventes par produit (SKU) et agence sur un horizon de 15 jours.
+Pipeline de prévision des ventes par produit (SKU) et agence sur un horizon de **4 mois**.
+
+## Table des matières
+
+- [Contexte](#contexte)
+- [Approche Méthodologique](#approche-méthodologique)
+- [Architecture](#architecture)
+- [Installation](#installation)
+- [Données](#données)
+- [Features Incluses](#features-incluses)
+- [Usage](#usage)
+- [Modèles](#modèles)
+- [Métriques](#métriques)
+- [Vision Production (GCP)](#vision-production-gcp)
+- [Limitations et Améliorations](#limitations-et-améliorations)
+- [Hypothèses](#hypothèses)
 
 ## Contexte
 
@@ -10,28 +25,43 @@ Ce projet répond à un besoin de prévision des volumes de ventes mensuels pour
 - La planification logistique
 - Les décisions commerciales
 
+## Approche Méthodologique
+
+Ce projet représente la **vision production** d'une solution de prévision. En amont, le workflow data science classique a été suivi :
+
+1. **Business Understanding** : Comprendre le besoin métier (prévision 4 mois, granularité SKU/agence)
+2. **EDA** : Analyse exploratoire pour comprendre les données, saisonnalités, tendances
+3. **Feature Engineering** : Identification des features pertinentes (lags, rolling means)
+4. **Modelling** : Comparaison de plusieurs algorithmes (RF, XGBoost, LightGBM)
+5. **Evaluation** : Sélection du meilleur modèle sur métriques métier
+
+Le code présent se concentre sur **l'industrialisation** : code modulaire, reproductible et déployable.
+
 ## Architecture
 
-```
+```text
 sales-forecasting-retail/
 ├── src/
+│   ├── configs/
+│   │   └── config.py          # Configuration centralisée
 │   ├── data/
-│   │   └── loader.py           # Chargement et split des données
+│   │   ├── loader.py          # Chargement des données
+│   │   └── preprocessing.py   # Préparation et encodage
 │   ├── features/
-│   │   └── engineering.py      # Feature engineering
-│   ├── models/
-│   │   └── trainer.py          # Entraînement LightGBM
-│   ├── evaluation/
-│   │   └── metrics.py          # Métriques (MAE, RMSE, MAPE)
+│   │   └── engineering.py     # Feature engineering
+│   ├── model/
+│   │   ├── training.py        # Entraînement des modèles
+│   │   └── evaluation.py      # Métriques d'évaluation
 │   └── inference/
-│       └── predictor.py        # Prédiction et sauvegarde
+│       └── predictor.py       # Prédiction
 ├── scripts/
-│   ├── train.py                # Script d'entraînement
-│   └── predict.py              # Script de prédiction
+│   ├── train.py               # Script d'entraînement
+│   └── predict.py             # Script de prédiction
 ├── data/
-│   └── raw/                    # Données brutes
-├── models/                     # Modèles sauvegardés
-└── outputs/                    # Prédictions générées
+│   ├── raw/                   # Données brutes
+│   └── processed/             # Données transformées
+├── models/                    # Modèles sauvegardés
+└── outputs/                   # Prédictions générées
 ```
 
 ## Installation
@@ -41,146 +71,264 @@ sales-forecasting-retail/
 git clone https://github.com/jass228/sales-forecasting-retail.git
 cd sales-forecasting-retail
 
-# Installer les dépendances avec uv
+# Option 1 : avec uv (recommandé)
 uv sync
+
+# Option 2 : avec pip
+pip install -e .
 ```
 
 ## Données
 
 Le dataset contient les colonnes suivantes :
 
-- `agency` : Identifiant de l'agence
-- `sku` : Identifiant du produit
-- `date` : Date (granularité mensuelle)
-- `volume` : Volume des ventes (cible)
-- `avg_max_temp` : Température moyenne maximale
-- `price_actual` : Prix actuel
-- `discount_in_percent` : Pourcentage de remise
-- Features calendaires (jours fériés, événements)
+| Colonne                            | Description                     | Utilisée                |
+| ---------------------------------- | ------------------------------- | ----------------------- |
+| `agency`                           | Identifiant de l'agence/magasin | ✅ Encodée              |
+| `sku`                              | Identifiant du produit          | ✅ Encodée              |
+| `date`                             | Date (granularité mensuelle)    | ✅ Features temporelles |
+| `volume`                           | Volume des ventes (cible)       | ✅ Target + lags        |
+| `avg_max_temp`                     | Température moyenne maximale    | ✅ Exogène              |
+| `price_actual`                     | Prix actuel                     | ✅ Exogène              |
+| `price_regular`                    | Prix régulier                   | ✅ Exogène              |
+| `discount`                         | Montant de la remise            | ✅ Exogène              |
+| `discount_in_percent`              | Pourcentage de remise           | ✅ Exogène              |
+| `industry_volume`                  | Volume de l'industrie           | ✅ Exogène              |
+| `soda_volume`                      | Volume de sodas                 | ✅ Exogène              |
+| `avg_population_2017`              | Population moyenne              | ✅ Exogène              |
+| `avg_yearly_household_income_2017` | Revenu moyen des ménages        | ✅ Exogène              |
+| Colonnes événements                | Jours fériés et événements      | ✅ Exogène              |
+
+**Note sur les features exogènes à l'inférence** : Si ces colonnes ne sont pas fournies dans `new_data.csv`, elles sont automatiquement remplies avec les **dernières valeurs connues** de l'historique pour chaque couple agency/sku.
+
+## Features Incluses
+
+Le modèle utilise **32 features** au total :
+
+### Features catégorielles
+
+- `agency`, `sku` : Encodées avec OrdinalEncoder
+
+### Features temporelles (extraites de `date`)
+
+- `year`, `month`, `quarter`
+
+### Features de lag (historique des ventes)
+
+- `volume_lag_1`, `volume_lag_2`, `volume_lag_3`, `volume_lag_6`, `volume_lag_12`
+
+### Features de rolling mean (moyennes mobiles)
+
+- `volume_rolling_mean_3`, `volume_rolling_mean_6`, `volume_rolling_mean_12`
+
+### Features exogènes
+
+- **Prix** : `price_actual`, `price_regular`, `discount`, `discount_in_percent`
+- **Marché** : `industry_volume`, `soda_volume`
+- **Météo** : `avg_max_temp`
+- **Démographie** : `avg_population_2017`, `avg_yearly_household_income_2017`
+
+### Features événements
+
+- `easter_day`, `good_friday`, `new_year`, `christmas`, `labor_day`, `independence_day`, `revolution_day_memorial`, `regional_games`, `beer_capital`, `music_fest`
 
 ## Usage
 
 ### Entraînement
 
 ```bash
-uv run python scripts/train.py --data data/raw/ds_assortiment_dataset.csv
+# Avec uv
+uv run python scripts/train.py
+
+# Avec pip
+python scripts/train.py
 ```
 
-Options :
+**Artefacts générés** :
 
-- `--test-date` : Date de début du test set (défaut: 2017-07-01)
-- `--model-output` : Chemin du modèle (défaut: models/model.pkl)
-- `--artifacts-output` : Chemin des artifacts (défaut: models/artifacts.pkl)
+| Fichier                       | Description                                             |
+| ----------------------------- | ------------------------------------------------------- |
+| `models/best_model.pkl`       | Meilleur modèle entraîné                                |
+| `models/encoder.pkl`          | Encoder pour agency/sku                                 |
+| `models/history.csv`          | 12 derniers mois (pour calculer les lags à l'inférence) |
+| `models/model_comparison.csv` | Comparaison des performances des 3 modèles              |
+| `data/processed/`             | Données préparées (train, test)                         |
 
 ### Prédiction
 
 ```bash
-# Sur des données existantes
-uv run python scripts/predict.py --data data/raw/new_data.csv
+# Placer les nouvelles données dans data/raw/new_data.csv
 
-# Prévisions sur dates futures
-uv run python scripts/predict.py --forecast --start-date 2018-01-01 --end-date 2018-03-01
+# Avec uv
+uv run python scripts/predict.py
+
+# Avec pip
+python scripts/predict.py
 ```
 
-Options :
+**Format minimal de `new_data.csv`** :
 
-- `--model` : Chemin du modèle (défaut: models/model.pkl)
-- `--artifacts` : Chemin des artifacts (défaut: models/artifacts.pkl)
-- `--output` : Chemin de sortie (défaut: outputs/predictions.csv)
+```csv
+date,agency,sku
+2018-01-01,Agency_01,SKU_01
+2018-02-01,Agency_01,SKU_01
+...
+```
 
-## Features Engineering
+Les colonnes exogènes manquantes sont automatiquement remplies avec les dernières valeurs connues.
 
-### Features temporelles
+**Sortie** : `outputs/predictions.csv`
 
-- `year`, `month`, `quarter`
-- `day_of_month`, `day_of_week`, `week_of_year`
+## Modèles
 
-### Features historiques
+Trois algorithmes sont comparés :
 
-- `mean_volume_agency_sku_month` : Moyenne par agence/SKU/mois
-- `mean_volume_agency_sku` : Moyenne par agence/SKU
-- `mean_volume_sku_month` : Moyenne par SKU/mois (saisonnalité produit)
+| Modèle           | Configuration            |
+| ---------------- | ------------------------ |
+| **RandomForest** | 300 arbres, max_depth=12 |
+| **XGBoost**      | 500 estimateurs, lr=0.05 |
+| **LightGBM**     | 500 estimateurs, lr=0.05 |
 
-### Features du dataset
+Le meilleur modèle est sélectionné automatiquement sur le MAE.
 
-- `avg_max_temp` : Impact météo
-- `price_actual` : Impact prix
-- `discount_in_percent` : Impact promotions
-
-## Modèle
-
-**Algorithme** : LightGBM (Gradient Boosting)
-
-**Choix justifié** :
-
-- Performant sur données tabulaires
-- Gère nativement les variables catégorielles
-- Rapide à entraîner
-- Interprétable (feature importance)
-
-**Alternatives considérées** :
-
-- XGBoost : Performances similaires, temps d'entraînement plus long
-- Prophet : Adapté aux séries temporelles univariées, moins flexible
-- LSTM : Overkill pour des données mensuelles (~60 points par série)
+> **Note** : Les hyperparamètres utilisés sont des valeurs par défaut raisonnables. L'objectif de ce POC est de démontrer une architecture industrialisable, pas d'optimiser les performances du modèle. En production, une étape d'optimisation (GridSearchCV...) serait ajoutée.
 
 ## Métriques
 
-| Métrique | Description                                            |
-| -------- | ------------------------------------------------------ |
-| MAE      | Mean Absolute Error - Erreur moyenne en valeur absolue |
-| RMSE     | Root Mean Squared Error - Pénalise les grosses erreurs |
-| MAPE     | Mean Absolute Percentage Error - Erreur en pourcentage |
+| Métrique | Description                                  |
+| -------- | -------------------------------------------- |
+| **MAE**  | Erreur moyenne absolue (métrique principale) |
+| **RMSE** | Pénalise les grosses erreurs                 |
+| **MAPE** | Erreur en pourcentage                        |
 
-### Baseline
-
-Moyenne historique par agence/SKU/mois. Le modèle doit battre cette baseline pour être considéré utile.
+---
 
 ## Vision Production (GCP)
 
-```
+### Architecture Vertex AI
+
+```text
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Cloud Composer                           │
-│                    (Orchestration Airflow)                      │
+│                     Vertex AI Pipelines                         │
+│                  (Orchestration Kubeflow)                       │
 └─────────────────────────────────────────────────────────────────┘
                               │
           ┌───────────────────┼───────────────────┐
           ▼                   ▼                   ▼
    ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-   │  BigQuery   │     │  Vertex AI  │     │ Cloud Run   │
-   │  (Data)     │     │ (Training)  │     │ (API)       │
-   └─────────────┘     └─────────────┘     └─────────────┘
-          │                   │                   │
-          └───────────────────┴───────────────────┘
-                              │
-                              ▼
-                    ┌───────────────────┐
-                    │ Cloud Storage     │
-                    │ (Models/Artifacts)│
-                    └───────────────────┘
+   │  BigQuery   │     │ Vertex AI   │     │ Vertex AI   │
+   │  (Source)   │     │  Training   │     │   Batch     │
+   └─────────────┘     └─────────────┘     │ Prediction  │
+          │                   │            └─────────────┘
+          │                   ▼                   │
+          │           ┌─────────────┐             │
+          │           │ Model       │             │
+          │           │ Registry    │◄────────────┘
+          │           └─────────────┘
+          │                   │
+          └───────────────────┴───────────────────┐
+                              ▼                   ▼
+                    ┌───────────────┐     ┌─────────────┐
+                    │ Vertex AI     │     │ Cloud       │
+                    │ Feature Store │     │ Monitoring  │
+                    └───────────────┘     └─────────────┘
 ```
 
 ### Composants
 
-- **Cloud Composer** : Orchestration des pipelines (DAGs Airflow)
-- **BigQuery** : Stockage et requêtage des données
-- **Vertex AI** : Entraînement et versioning des modèles
-- **Cloud Run** : API de prédiction serverless
-- **Cloud Storage** : Stockage des modèles et artifacts
+| Composant                      | Rôle                                                            |
+| ------------------------------ | --------------------------------------------------------------- |
+| **BigQuery**                   | Stockage des données source (si déjà présent dans l'écosystème) |
+| **Vertex AI Training**         | Custom job pour l'entraînement du modèle                        |
+| **Vertex AI Model Registry**   | Versioning des modèles                                          |
+| **Vertex AI Batch Prediction** | Inférence en batch (voir stratégie ci-dessous)                  |
+| **Vertex AI Pipelines**        | Orchestration avec Kubeflow                                     |
+| **Vertex AI Feature Store**    | Versioning des features (optionnel)                             |
+| **Cloud Monitoring**           | Alerting et dashboards                                          |
+
+### Stratégie d'Inférence
+
+Pour ce cas d'usage (prévision mensuelle de ventes), une **inférence batch** est recommandée plutôt qu'un endpoint temps réel :
+
+| Critère            | Batch                | Temps réel                 |
+| ------------------ | -------------------- | -------------------------- |
+| Fréquence besoin   | Hebdomadaire/mensuel | À la demande               |
+| Latence acceptable | Minutes/heures       | Millisecondes              |
+| Coût               | Faible (pay-per-use) | Élevé (endpoint 24/7)      |
+| Complexité         | Simple               | Infrastructure à maintenir |
+
+**Recommandation** : Vertex AI Batch Prediction avec scheduling hebdomadaire via Vertex AI Pipelines.
+
+### Stratégie de Monitoring
+
+#### 1. Monitoring des performances
+
+| Métrique      | Seuil d'alerte      | Action         |
+| ------------- | ------------------- | -------------- |
+| MAE en prod   | > 1.5x MAE baseline | Investigation  |
+| MAPE          | > 20%               | Réentraînement |
+| Latency batch | > 2h                | Scaling        |
+
+#### 2. Détection du drift
+
+| Type de drift        | Méthode                                            | Fréquence      |
+| -------------------- | -------------------------------------------------- | -------------- |
+| **Data drift**       | KS-test sur distributions des features             | Hebdomadaire   |
+| **Concept drift**    | Monitoring MAE sur données récentes vs historiques | Hebdomadaire   |
+| **Prediction drift** | Distribution des prédictions vs baseline           | À chaque batch |
+
+**Implémentation** :
+
+- Vertex AI Model Monitoring pour le data drift automatique
+- Custom metrics dans Cloud Monitoring pour le concept drift
+- Alerting via Cloud Alerting + notification Slack/email
+
+### Stratégie de Réentraînement
+
+| Trigger               | Condition                      | Action                         |
+| --------------------- | ------------------------------ | ------------------------------ |
+| **Scheduled**         | Mensuel                        | Réentraînement automatique     |
+| **Performance-based** | MAE > seuil pendant 2 semaines | Réentraînement déclenché       |
+| **Data-based**        | Drift détecté (p-value < 0.05) | Réentraînement + investigation |
+| **Manuel**            | Changement business majeur     | Réentraînement + revalidation  |
+
+**Pipeline de réentraînement** :
+
+1. Récupération des nouvelles données (BigQuery)
+2. Feature engineering
+3. Entraînement sur fenêtre glissante (ex: 24 derniers mois)
+4. Évaluation sur holdout récent
+5. Comparaison avec modèle en prod
+6. Déploiement si amélioration > seuil
+7. A/B testing optionnel
+
+---
 
 ## Limitations et Améliorations
 
 ### Limitations actuelles
 
-- Pas de gestion des nouveaux produits/agences (cold start)
-- Features météo/prix supposées connues à l'avance
+- **Cold start** : Pas de gestion des nouveaux produits/agences
+- **Features exogènes à l'inférence** : Remplies avec dernières valeurs connues (hypothèse de stabilité)
+- **Horizon unique** : Un seul modèle pour tous les horizons
 
 ### Améliorations possibles
 
-- Ajouter des features de lag pour prédiction court terme
-- Implémenter un modèle par catégorie de produit
-- Ajouter une validation croisée temporelle
-- Intégrer des données externes (météo prévue, calendrier promotionnel)
+| Priorité | Amélioration                                               |
+| -------- | ---------------------------------------------------------- |
+| Haute    | Intégrer prévisions météo réelles (API météo)              |
+| Haute    | Intégrer calendrier promotionnel planifié                  |
+| Moyenne  | Multi-horizon : un modèle par horizon (H+1, H+2, H+3, H+4) |
+| Moyenne  | Cross-validation temporelle (TimeSeriesSplit)              |
+| Basse    | Modèle hiérarchique (agrégation par catégorie produit)     |
+| Basse    | Modèles deep learning (si plus de données)                 |
+
+## Hypothèses
+
+1. Les données historiques sont représentatives du futur
+2. La structure des agences/produits reste stable
+3. Les patterns saisonniers sont récurrents
+4. Les features exogènes (prix, météo) restent relativement stables à court terme (si non fournies à l'inférence)
 
 ## Auteur
 
